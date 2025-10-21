@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import laspy
 import requests
+import re
 
 try:
     st.set_page_config(page_title="LAZ Converter", page_icon="📡")
@@ -28,6 +29,36 @@ if st.button("Increment counter"):
 
 st.write("Counter value (persists across reruns):", st.session_state.counter)
 
+def _sanitize_key(s):
+    return re.sub(r'\W+', '_', str(s))
+
+def downsample_ui(x, y, z, key_prefix="ds"):
+    """Show downsampling controls in an expander and return possibly-downsampled arrays."""
+    if x is None or y is None or z is None:
+        return x, y, z
+
+    kp = _sanitize_key(key_prefix)
+
+    with st.expander("Optional: reduce number of points before exporting", expanded=True):
+        st.write("Choose a method to reduce point count. Voxel grid keeps spatial coverage.")
+        ds_method = st.selectbox("Downsample method", ["None", "Random sample", "Voxel grid"], key=f"{kp}_method")
+        if ds_method == "Random sample":
+            frac = st.slider("Sample fraction", 0.01, 1.0, 0.1, key=f"{kp}_frac")
+            if frac < 1.0:
+                n = len(x)
+                k = max(1, int(n * float(frac)))
+                idx = np.random.choice(n, k, replace=False)
+                x, y, z = x[idx], y[idx], z[idx]
+        elif ds_method == "Voxel grid":
+            voxel_size = st.number_input("Voxel size (meters)", min_value=0.01, value=1.0, step=0.1, key=f"{kp}_vox")
+            if voxel_size > 0:
+                coords = np.vstack((x, y, z)).T
+                ix = np.floor(coords / float(voxel_size)).astype(np.int64)
+                structured = np.core.records.fromarrays(ix.T, names='ix,iy,iz')
+                _, unique_idx = np.unique(structured, return_index=True)
+                x, y, z = x[unique_idx], y[unique_idx], z[unique_idx]
+    return x, y, z
+
 if uploaded_file is not None:
     try:
         with st.spinner("Reading LAZ file..."):
@@ -38,6 +69,8 @@ if uploaded_file is not None:
         x = np.atleast_1d(np.asarray(las.x))
         y = np.atleast_1d(np.asarray(las.y))
         z = np.atleast_1d(np.asarray(las.z))
+
+        x, y, z = downsample_ui(x, y, z, key_prefix=f"uploaded_{uploaded_file.name}")
 
         if not (len(x) == len(y) == len(z)):
             raise ValueError("Coordinate arrays have mismatched lengths")
@@ -134,6 +167,8 @@ if laz_url:
         x = np.atleast_1d(np.asarray(las.x))
         y = np.atleast_1d(np.asarray(las.y))
         z = np.atleast_1d(np.asarray(las.z))
+
+        x, y, z = downsample_ui(x, y, z, key_prefix="downloaded_url")
 
         if not (len(x) == len(y) == len(z)):
             raise ValueError("Coordinate arrays have mismatched lengths")
